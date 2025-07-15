@@ -6,8 +6,8 @@ cuda_source = """
 __global__ void reduce_neighbor_atomic_kernel(const float* input, float* output, int N) {
     __shared__ float sdata[128]; 
 
-    uint tid = threadIdx.x;
-    uint i = blockIdx.x * blockDim.x * 2 + tid;
+    int tid = threadIdx.x;
+    int i = blockIdx.x * blockDim.x * 2 + tid;
 
     float val = 0.0f;
     if (i < N) val += input[i];

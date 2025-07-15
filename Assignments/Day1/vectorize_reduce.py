@@ -4,35 +4,57 @@ from torch.profiler import profile, record_function, ProfilerActivity
 
 cuda_source = """
 __global__ void reduce_reorder_atomic_kernel(const float* input, float* output, int N) {
-    __shared__ float sdata[1024]; //由所有thread共享的内存
+    __shared__ float sdata[1024 * 4]; //shared memory扩容到4倍
 
     int tid = threadIdx.x;
     int i = blockIdx.x * blockDim.x * 2 + tid;
 
-    float val = 0.0f;
-    if (i < N) val += input[i];
-    if (i + blockDim.x < N) val += input[i + blockDim.x]; //这里先手动reduce了一次
-    sdata[tid] = val; //各个线程初始化数据
-
-    __syncthreads(); //同步
-
+    float4* sdata_v4 = reinterpret_cast<float4*>(sdata);
+    const float4* input_v4 = reinterpret_cast<const float4*>(input);
     
+    float4 val = {0.0f, 0.0f, 0.0f, 0.0f};
+    float4 tmp_val;
+    if ((i << 2) < N) {
+        tmp_val = input_v4[i];
+        val.x += tmp_val.x;
+        val.y += tmp_val.y;
+        val.z += tmp_val.z;
+        val.w += tmp_val.w;
+    }
+    if (((i + blockDim.x) << 2) < N) {
+        tmp_val = input_v4[i + blockDim.x];
+        val.x += tmp_val.x;
+        val.y += tmp_val.y;
+        val.z += tmp_val.z;
+        val.w += tmp_val.w;
+    }
+    sdata_v4[tid] = val;
+
+    __syncthreads();
 
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) //选取前一半的thread
-            sdata[tid] += sdata[tid + s]; //加上后面的对应数据
+        if (tid < s) {
+            val = sdata_v4[tid];
+            tmp_val = sdata_v4[tid + s];
+            val.x += tmp_val.x;
+            val.y += tmp_val.y;
+            val.z += tmp_val.z;
+            val.w += tmp_val.w;
+            sdata_v4[tid] = val;
+        }
         __syncthreads();
     }
 
     if (tid == 0) {
-        atomicAdd(output, sdata[0]);  
+        atomicAdd(output, sdata[0] + sdata[1] + sdata[2] + sdata[3]);
     }
 }
 
 torch::Tensor reduce_reorder_atomic(torch::Tensor input) {
     int N = input.size(0);
     int threads = 1024;
-    int blocks = (N + threads * 2 - 1) / (threads * 2); //因为一个thread可以消费两个input单元
+
+    int blocks = (N + threads * 2 * 4 - 1) / (threads * 2 * 4);
 
     auto output = torch::zeros({}, input.options());
     
