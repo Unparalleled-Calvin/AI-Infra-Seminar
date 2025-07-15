@@ -57,12 +57,12 @@ x = torch.randn(N, device="cuda")
 
 with profile(
     activities=[ProfilerActivity.CUDA],
-    schedule=torch.profiler.schedule(wait=1, warmup=1, active=2),
+    schedule=torch.profiler.schedule(wait=0, warmup=1, active=2),
     on_trace_ready=torch.profiler.tensorboard_trace_handler("./log/reduce_atomic_prof"),
     record_shapes=False,
     with_stack=False,
 ) as prof:
-    for i in range(4):
+    for i in range(3):
         prof.step()
         with record_function("cuda_reduce_atomic"), torch.no_grad():
             out1 = module.reduce_reorder_atomic(x)

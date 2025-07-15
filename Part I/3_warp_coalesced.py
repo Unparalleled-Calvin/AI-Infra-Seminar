@@ -70,12 +70,12 @@ x = torch.randn((rows, cols), device="cuda")
 
 with profile(
     activities=[ProfilerActivity.CUDA],
-    schedule=torch.profiler.schedule(wait=1, warmup=1, active=2),
+    schedule=torch.profiler.schedule(wait=0, warmup=1, active=2),
     on_trace_ready=torch.profiler.tensorboard_trace_handler("./log/warp_coalesced"),
     record_shapes=False,
     with_stack=False,
 ) as prof:
-    for _ in range(4):
+    for _ in range(3):
         prof.step()
         with record_function("silu_torch"), torch.no_grad():
             out0 = torch.nn.functional.silu(x)

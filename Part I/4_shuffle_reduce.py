@@ -2,14 +2,14 @@ import torch
 from torch.utils.cpp_extension import load_inline
 from torch.profiler import profile, record_function, ProfilerActivity
 
-cuda_code = """
+cuda_source = """
 __inline__ __device__ float warp_reduce_sum(float val) {
     for (int8_t offset = 16; offset > 0; offset >>= 1)
         val += __shfl_down_sync(0xffffffff, val, offset);
     return val;
 }
 
-__global__ void reduce_sum_large_tensor_kernel(const float* __restrict__ input, float* output, int N) {
+__global__ void reduce_shuffle_atomic_kernel(const float* input, float* output, int N) {
     __shared__ float shared[32];  
 
     float val = 0.0f;
@@ -35,23 +35,22 @@ __global__ void reduce_sum_large_tensor_kernel(const float* __restrict__ input, 
         atomicAdd(output, block_sum);
 }
 
-torch::Tensor reduce_sum_large(torch::Tensor input) {
+torch::Tensor reduce_shuffle_atomic(torch::Tensor input) {
     auto output = torch::zeros({}, input.options());
     const int N = input.numel();
     const int threads = 1024;
     const int blocks = (N + threads * 2 - 1) / (threads * 2);
-    reduce_sum_large_tensor_kernel<<<blocks, threads>>>(input.data_ptr<float>(), output.data_ptr<float>(), N);
+    reduce_shuffle_atomic_tensor_kernel<<<blocks, threads>>>(input.data_ptr<float>(), output.data_ptr<float>(), N);
     return output;
 }
 """
 
-cpp_sig = "torch::Tensor reduce_sum_large(torch::Tensor input);"
-
+cpp_source = "torch::Tensor reduce_shuffle_atomic(torch::Tensor input);"
 module = load_inline(
-    name="cuda_reduce_large",
-    cpp_sources=cpp_sig,
-    cuda_sources=cuda_code,
-    functions=["reduce_sum_large"],
+    name="moss_op",
+    cpp_sources=cpp_source,
+    cuda_sources=cuda_source,
+    functions=["reduce_shuffle_atomic"],
     verbose=False,
 )
 
@@ -70,7 +69,7 @@ with profile(
         with record_function("torch_sum"), torch.no_grad():
             out0 = torch.sum(x)
         with record_function("cuda_reduce_sum_warp"), torch.no_grad():
-            out1 = module.reduce_sum_large(x)
+            out1 = module.reduce_shuffle_atomic(x)
 
 
 assert torch.allclose(out0, out1)
